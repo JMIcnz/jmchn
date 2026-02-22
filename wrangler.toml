@@ -1,0 +1,26 @@
+name = "ecommerce-api"
+main = "src/index.ts"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+ENVIRONMENT = "production"
+CORS_ORIGIN  = "https://yourstore.com"   # ← update to your Gatsby domain
+
+# Secrets (set via: wrangler secret put SECRET_NAME)
+# DATABASE_URL          — Neon connection string (pooled)
+# STRIPE_SECRET_KEY     — sk_live_...
+# STRIPE_WEBHOOK_SECRET — whsec_...
+# JWT_SECRET            — ≥32 char random string
+
+[[rules]]
+type = "ESModule"
+globs = ["**/*.ts"]
+
+[build]
+command = "npm run build"
+
+# Route the /webhooks path without rate limiting in production
+[[routes]]
+pattern = "api.yourstore.com/*"
+zone_name = "yourstore.com"
