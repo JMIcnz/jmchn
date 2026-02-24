@@ -10,7 +10,7 @@
 
 const path = require('path')
 
-const API_BASE = process.env.GATSBY_API_URL || 'https://api.yourstore.com'
+const API_BASE = process.env.GATSBY_API_URL || 'https://bizify.jmi.workers.dev'
 
 async function fetchAllProducts() {
   const res = await fetch(`${API_BASE}/products?limit=1000`)
