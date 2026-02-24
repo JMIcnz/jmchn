@@ -10,40 +10,32 @@
  *   Webhooks  POST /webhooks/stripe
  */
 
+
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { logger } from 'hono/logger'
 import { secureHeaders } from 'hono/secure-headers'
-import { bearerAuth } from 'hono/bearer-auth'
 import { HTTPException } from 'hono/http-exception'
 import { neon } from '@neondatabase/serverless'
 import Stripe from 'stripe'
 import { SignJWT, jwtVerify } from 'jose'
 import { hash, compare } from 'bcryptjs'
-import admin from './admin'
-
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 type Env = {
-  DATABASE_URL: string          // Neon connection string
+  DATABASE_URL: string
   STRIPE_SECRET_KEY: string
   STRIPE_WEBHOOK_SECRET: string
-  JWT_SECRET: string            // ≥32 char random string
-  CORS_ORIGIN: string           // Gatsby site origin, e.g. https://mystore.com
+  JWT_SECRET: string
+  CORS_ORIGIN: string
   ENVIRONMENT: 'development' | 'production'
-}
-
-type Variables = {
-  userId: string
-  cartId: string
 }
 
 // ─── App bootstrap ───────────────────────────────────────────────────────────
 
-const app = new Hono<{ Bindings: Env; Variables: Variables }>()
+const app = new Hono<{ Bindings: Env }>()
 
-// Global middleware
 app.use('*', logger())
 app.use('*', secureHeaders())
 app.use('*', async (c, next) => {
@@ -62,12 +54,11 @@ app.use('*', async (c, next) => {
 
 const getDb = (env: Env) => neon(env.DATABASE_URL)
 
-
 // ─── JWT helpers ─────────────────────────────────────────────────────────────
 
-async function createToken(userId: string, secret: string) {
+async function createToken(userId: string, secret: string, role = 'customer') {
   const key = new TextEncoder().encode(secret)
-  return new SignJWT({ sub: userId })
+  return new SignJWT({ sub: userId, role })
     .setProtectedHeader({ alg: 'HS256' })
     .setIssuedAt()
     .setExpirationTime('7d')
@@ -93,6 +84,18 @@ const requireAuth = async (c: any, next: any) => {
   } catch {
     throw new HTTPException(401, { message: 'Invalid or expired token' })
   }
+}
+
+const optionalAuth = async (c: any, next: any) => {
+  const authHeader = c.req.header('Authorization') ?? ''
+  const token = authHeader.replace(/^Bearer\s+/, '')
+  if (token) {
+    try {
+      const userId = await verifyToken(token, c.env.JWT_SECRET)
+      c.set('userId', userId)
+    } catch { /* anonymous */ }
+  }
+  await next()
 }
 
 // ─── AUTH routes ─────────────────────────────────────────────────────────────
@@ -152,20 +155,51 @@ auth.get('/me', requireAuth, async (c) => {
 const products = new Hono<{ Bindings: Env }>()
 
 products.get('/', async (c) => {
-  console.log(c.env.DATABASE_URL.substr(0,22))
   const sql = getDb(c.env)
   const { category, featured, search, page = '1', limit = '24' } = c.req.query()
   const offset = (parseInt(page) - 1) * parseInt(limit)
 
+  // Build queries conditionally — Neon cannot type bare `null` parameters
   let rows
   if (search) {
+    const pattern = '%' + search + '%'
     rows = await sql`
-      SELECT p.*, c.name AS category_name,
-        (SELECT COUNT(*) OVER()) AS total_count
+      SELECT p.*, c.name AS category_name
       FROM products p
       LEFT JOIN categories c ON c.id = p.category_id
       WHERE p.is_active = TRUE
-        AND (p.name ILIKE ${'%' + search + '%'} OR p.description ILIKE ${'%' + search + '%'})
+        AND (p.name ILIKE ${pattern} OR p.description ILIKE ${pattern})
+      ORDER BY p.is_featured DESC, p.created_at DESC
+      LIMIT ${parseInt(limit)} OFFSET ${offset}
+    `
+  } else if (category && featured !== undefined) {
+    rows = await sql`
+      SELECT p.*, c.name AS category_name
+      FROM products p
+      LEFT JOIN categories c ON c.id = p.category_id
+      WHERE p.is_active = TRUE
+        AND c.slug = ${category}
+        AND p.is_featured = ${featured === 'true'}
+      ORDER BY p.is_featured DESC, p.created_at DESC
+      LIMIT ${parseInt(limit)} OFFSET ${offset}
+    `
+  } else if (category) {
+    rows = await sql`
+      SELECT p.*, c.name AS category_name
+      FROM products p
+      LEFT JOIN categories c ON c.id = p.category_id
+      WHERE p.is_active = TRUE
+        AND c.slug = ${category}
+      ORDER BY p.is_featured DESC, p.created_at DESC
+      LIMIT ${parseInt(limit)} OFFSET ${offset}
+    `
+  } else if (featured !== undefined) {
+    rows = await sql`
+      SELECT p.*, c.name AS category_name
+      FROM products p
+      LEFT JOIN categories c ON c.id = p.category_id
+      WHERE p.is_active = TRUE
+        AND p.is_featured = ${featured === 'true'}
       ORDER BY p.is_featured DESC, p.created_at DESC
       LIMIT ${parseInt(limit)} OFFSET ${offset}
     `
@@ -175,8 +209,6 @@ products.get('/', async (c) => {
       FROM products p
       LEFT JOIN categories c ON c.id = p.category_id
       WHERE p.is_active = TRUE
-        AND (${category ?? null} IS NULL OR c.slug = ${category ?? null})
-        AND (${featured ?? null} IS NULL OR p.is_featured = ${featured === 'true'})
       ORDER BY p.is_featured DESC, p.created_at DESC
       LIMIT ${parseInt(limit)} OFFSET ${offset}
     `
@@ -207,10 +239,6 @@ products.get('/:slug', async (c) => {
 
 const cart = new Hono<{ Bindings: Env }>()
 
-/**
- * Resolves or creates a cart. Authenticated users get a user-scoped cart;
- * anonymous users use a session token sent via X-Cart-Token header.
- */
 async function resolveCart(c: any, sql: any, create = false) {
   const userId = c.get('userId') as string | undefined
   const sessionToken = c.req.header('X-Cart-Token')
@@ -248,19 +276,6 @@ async function getCartWithItems(cartId: string, sql: any) {
   return { items, subtotal, item_count: items.reduce((s: number, i: any) => s + i.quantity, 0) }
 }
 
-// Optional auth for cart (works for both authenticated and anonymous)
-const optionalAuth = async (c: any, next: any) => {
-  const authHeader = c.req.header('Authorization') ?? ''
-  const token = authHeader.replace(/^Bearer\s+/, '')
-  if (token) {
-    try {
-      const userId = await verifyToken(token, c.env.JWT_SECRET)
-      c.set('userId', userId)
-    } catch { /* anonymous */ }
-  }
-  await next()
-}
-
 cart.get('/', optionalAuth, async (c) => {
   const sql = getDb(c.env)
   const cartRow = await resolveCart(c, sql, false)
@@ -274,7 +289,6 @@ cart.post('/items', optionalAuth, async (c) => {
   const { product_id, variant_id, quantity = 1 } = await c.req.json()
   if (!product_id) throw new HTTPException(400, { message: 'product_id required' })
 
-  // Verify product exists and get price
   const [product] = await sql`SELECT id, price_cents FROM products WHERE id = ${product_id} AND is_active = TRUE`
   if (!product) throw new HTTPException(404, { message: 'Product not found' })
 
@@ -288,14 +302,25 @@ cart.post('/items', optionalAuth, async (c) => {
 
   const cartRow = await resolveCart(c, sql, true)
 
-  // Upsert cart item
-  const [item] = await sql`
-    INSERT INTO cart_items (cart_id, product_id, variant_id, quantity, price_cents)
-    VALUES (${cartRow.id}, ${product_id}, ${variant_id ?? null}, ${quantity}, ${price_cents})
-    ON CONFLICT (cart_id, product_id, variant_id)
-    DO UPDATE SET quantity = cart_items.quantity + ${quantity}, updated_at = NOW()
-    RETURNING *
-  `
+  // Use separate insert paths to avoid null UUID type ambiguity
+  let item
+  if (variant_id) {
+    ;[item] = await sql`
+      INSERT INTO cart_items (cart_id, product_id, variant_id, quantity, price_cents)
+      VALUES (${cartRow.id}, ${product_id}, ${variant_id}, ${quantity}, ${price_cents})
+      ON CONFLICT (cart_id, product_id, variant_id)
+      DO UPDATE SET quantity = cart_items.quantity + ${quantity}, updated_at = NOW()
+      RETURNING *
+    `
+  } else {
+    ;[item] = await sql`
+      INSERT INTO cart_items (cart_id, product_id, quantity, price_cents)
+      VALUES (${cartRow.id}, ${product_id}, ${quantity}, ${price_cents})
+      ON CONFLICT (cart_id, product_id, variant_id)
+      DO UPDATE SET quantity = cart_items.quantity + ${quantity}, updated_at = NOW()
+      RETURNING *
+    `
+  }
 
   const data = await getCartWithItems(cartRow.id, sql)
   const headers: Record<string, string> = {}
@@ -346,7 +371,6 @@ checkout.post('/session', optionalAuth, async (c) => {
 
   const stripe = new Stripe(c.env.STRIPE_SECRET_KEY)
 
-  // Build Stripe line items from cart
   const lineItems = items.map((item: any) => ({
     price_data: {
       currency: 'usd',
@@ -360,7 +384,6 @@ checkout.post('/session', optionalAuth, async (c) => {
     quantity: item.quantity,
   }))
 
-  // Optionally look up existing Stripe customer
   let customer: string | undefined
   const userId = c.get('userId')
   if (userId) {
@@ -383,7 +406,6 @@ checkout.post('/session', optionalAuth, async (c) => {
     automatic_tax: { enabled: true },
   })
 
-  // Persist session reference on cart
   await sql`UPDATE carts SET stripe_session_id = ${session.id} WHERE id = ${cartRow.id}`
 
   return c.json({ session_id: session.id, url: session.url })
@@ -429,11 +451,9 @@ webhooks.post('/stripe', async (c) => {
   try {
     event = await stripe.webhooks.constructEventAsync(body, sig, c.env.STRIPE_WEBHOOK_SECRET)
   } catch (err: any) {
-    console.error('Webhook signature verification failed:', err.message)
     throw new HTTPException(400, { message: `Webhook error: ${err.message}` })
   }
 
-  // Idempotency check
   const existing = await sql`SELECT id FROM stripe_webhook_events WHERE id = ${event.id}`
   if (existing.length) return c.json({ received: true, duplicate: true })
 
@@ -457,7 +477,6 @@ webhooks.post('/stripe', async (c) => {
 
 async function processStripeEvent(event: Stripe.Event, sql: any, stripe: Stripe) {
   switch (event.type) {
-
     case 'checkout.session.completed': {
       const session = event.data.object as Stripe.Checkout.Session
       const cartId = session.metadata?.cart_id
@@ -465,14 +484,12 @@ async function processStripeEvent(event: Stripe.Event, sql: any, stripe: Stripe)
 
       if (!cartId) break
 
-      // Retrieve full session with line items
       const fullSession = await stripe.checkout.sessions.retrieve(session.id, {
         expand: ['line_items.data.price.product'],
       })
 
       const lineItems = fullSession.line_items?.data ?? []
 
-      // Create order
       const [order] = await sql`
         INSERT INTO orders (
           user_id, status, stripe_session_id, stripe_payment_intent_id,
@@ -480,29 +497,27 @@ async function processStripeEvent(event: Stripe.Event, sql: any, stripe: Stripe)
           customer_email, customer_name, shipping_address
         ) VALUES (
           ${userId}, 'paid', ${session.id}, ${session.payment_intent as string},
-          ${session.amount_subtotal ?? 0}, ${session.amount_total ?? 0}, ${session.currency?.toUpperCase() ?? 'USD'},
-          ${session.customer_details?.email ?? ''}, ${session.customer_details?.name ?? null},
+          ${session.amount_subtotal ?? 0}, ${session.amount_total ?? 0},
+          ${session.currency?.toUpperCase() ?? 'USD'},
+          ${session.customer_details?.email ?? ''},
+          ${session.customer_details?.name ?? null},
           ${JSON.stringify(session.shipping_details?.address ?? {})}
         ) RETURNING id
       `
 
-      // Create order items from line items
       for (const li of lineItems) {
         const product = li.price?.product as Stripe.Product
         await sql`
-          INSERT INTO order_items (order_id, product_id, variant_id, sku, product_name, quantity, unit_price_cents, total_cents)
+          INSERT INTO order_items (order_id, product_id, product_name, quantity, unit_price_cents, total_cents)
           VALUES (
             ${order.id},
             ${product?.metadata?.product_id ?? null},
-            ${product?.metadata?.variant_id || null},
-            ${product?.metadata?.variant_id || null},
             ${li.description ?? ''},
             ${li.quantity ?? 1},
             ${li.price?.unit_amount ?? 0},
             ${(li.price?.unit_amount ?? 0) * (li.quantity ?? 1)}
           )
         `
-        // Decrement stock if variant
         if (product?.metadata?.variant_id) {
           await sql`
             UPDATE variants SET stock_qty = GREATEST(0, stock_qty - ${li.quantity ?? 1})
@@ -511,12 +526,10 @@ async function processStripeEvent(event: Stripe.Event, sql: any, stripe: Stripe)
         }
       }
 
-      // Link Stripe customer to user
       if (userId && session.customer) {
         await sql`UPDATE users SET stripe_customer_id = ${session.customer as string} WHERE id = ${userId}`
       }
 
-      // Clear cart
       await sql`DELETE FROM cart_items WHERE cart_id = ${cartId}`
       break
     }
@@ -549,10 +562,20 @@ app.route('/cart', cart)
 app.route('/checkout', checkout)
 app.route('/orders', orders)
 app.route('/webhooks', webhooks)
-app.route('/admin', admin)
 
 // Health check
 app.get('/health', (c) => c.json({ ok: true, env: c.env.ENVIRONMENT }))
+
+// DB health check — useful for debugging
+app.get('/health/db', async (c) => {
+  try {
+    const sql = getDb(c.env)
+    await sql`SELECT 1`
+    return c.json({ ok: true, db: 'connected' })
+  } catch (err: any) {
+    return c.json({ ok: false, error: err.message }, 500)
+  }
+})
 
 // Global error handler
 app.onError((err, c) => {
@@ -560,7 +583,7 @@ app.onError((err, c) => {
     return c.json({ error: err.message }, err.status)
   }
   console.error('Unhandled error:', err)
-  return c.json({ error: 'Internal server error' }, 500)
+  return c.json({ error: 'Internal server error', detail: err.message }, 500)
 })
 
 export default app
