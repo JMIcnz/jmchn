@@ -1,6 +1,5 @@
 /**
  * index.tsx — Homepage
- * Lists all products fetched client-side, with category filters.
  */
 import React, { useEffect, useState } from 'react'
 import { Helmet } from 'react-helmet'
@@ -38,19 +37,35 @@ const S = {
 export default function IndexPage() {
   const [products, setProducts] = useState<Product[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [filter, setFilter] = useState('All')
   const [categories, setCategories] = useState<string[]>(['All'])
 
   useEffect(() => {
-    fetch(`${API_BASE}/products?limit=100`)
-      .then(r => r.json())
+    if (!API_BASE) {
+      setError('GATSBY_API_URL is not set. Add it to your Cloudflare Pages environment variables.')
+      setLoading(false)
+      return
+    }
+
+    const url = `${API_BASE}/products?limit=100`
+    fetch(url)
+      .then(r => {
+        if (!r.ok) throw new Error(`API returned ${r.status} from ${url}`)
+        return r.json()
+      })
       .then(data => {
         const prods: Product[] = data.products || []
+        if (prods.length === 0) {
+          setError(`API responded OK but returned 0 products. Check your Neon database has seed data. (URL: ${url})`)
+        }
         setProducts(prods)
         const cats = ['All', ...new Set(prods.map(p => p.category_name).filter(Boolean) as string[])]
         setCategories(cats)
       })
-      .catch(console.error)
+      .catch(err => {
+        setError(`Failed to load products: ${err.message} — URL attempted: ${url}`)
+      })
       .finally(() => setLoading(false))
   }, [])
 
@@ -84,24 +99,44 @@ export default function IndexPage() {
             </h1>
           </div>
 
+          {/* Error banner */}
+          {error && (
+            <div style={{ background: '#1a0a0a', border: '1px solid #c0392b', padding: '16px 20px', marginBottom: 32, fontSize: 12, color: '#e74c3c', lineHeight: 1.7 }}>
+              <strong>Error:</strong> {error}
+              <br />
+              <span style={{ color: S.muted, marginTop: 8, display: 'block' }}>
+                Fix: Go to <strong>Cloudflare Pages → jmshop → Settings → Environment Variables</strong> and add:
+                <br />
+                <code style={{ color: S.gold }}>GATSBY_API_URL = https://bizify.jmi.workers.dev</code>
+                <br />
+                Then trigger a new deployment.
+              </span>
+            </div>
+          )}
+
           {/* Category filters */}
-          <div style={{ display: 'flex', gap: 8, marginBottom: 36, flexWrap: 'wrap' }}>
-            {categories.map(cat => (
-              <button key={cat} onClick={() => setFilter(cat)} style={{
-                padding: '7px 18px', fontSize: 11, letterSpacing: '0.1em', textTransform: 'uppercase',
-                border: `1px solid ${filter === cat ? S.gold : S.border}`,
-                background: 'none', color: filter === cat ? S.gold : S.muted,
-                cursor: 'pointer', fontFamily: 'inherit', transition: 'all .2s',
-              }}>{cat}</button>
-            ))}
-          </div>
+          {products.length > 0 && (
+            <div style={{ display: 'flex', gap: 8, marginBottom: 36, flexWrap: 'wrap' }}>
+              {categories.map(cat => (
+                <button key={cat} onClick={() => setFilter(cat)} style={{
+                  padding: '7px 18px', fontSize: 11, letterSpacing: '0.1em', textTransform: 'uppercase',
+                  border: `1px solid ${filter === cat ? S.gold : S.border}`,
+                  background: 'none', color: filter === cat ? S.gold : S.muted,
+                  cursor: 'pointer', fontFamily: 'inherit', transition: 'all .2s',
+                }}>{cat}</button>
+              ))}
+            </div>
+          )}
+
+          {/* States */}
+          {loading && <p style={{ color: S.muted, fontSize: 13 }}>Loading products…</p>}
 
           {/* Grid */}
-          {loading ? (
-            <p style={{ color: S.muted, fontSize: 13 }}>Loading products…</p>
-          ) : filtered.length === 0 ? (
+          {!loading && !error && filtered.length === 0 && (
             <p style={{ color: S.muted, fontSize: 13 }}>No products found.</p>
-          ) : (
+          )}
+
+          {!loading && filtered.length > 0 && (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 2 }}>
               {filtered.map(product => {
                 const imgs = parseImages(product.images)
@@ -110,7 +145,9 @@ export default function IndexPage() {
                   <Link key={product.id} to={`/products/${product.slug}`} style={{ textDecoration: 'none', color: 'inherit', background: S.surface, display: 'block' }}>
                     <div style={{ overflow: 'hidden' }}>
                       {img ? (
-                        <img src={img} alt={product.name} style={{ width: '100%', aspectRatio: '3/4', objectFit: 'cover', display: 'block', transition: 'transform .5s' }}
+                        <img
+                          src={img} alt={product.name}
+                          style={{ width: '100%', aspectRatio: '3/4', objectFit: 'cover', display: 'block', transition: 'transform .5s' }}
                           onMouseEnter={e => (e.currentTarget.style.transform = 'scale(1.04)')}
                           onMouseLeave={e => (e.currentTarget.style.transform = 'scale(1)')}
                         />
@@ -132,7 +169,7 @@ export default function IndexPage() {
                           <span style={{ fontSize: 13, color: S.muted, textDecoration: 'line-through', marginLeft: 10 }}>{fmt(product.compare_at_cents)}</span>
                         )}
                         {product.compare_at_cents && (
-                          <span style={{ fontSize: 10, background: S.gold, color: S.bg, padding: '2px 6px', marginLeft: 8, letterSpacing: '0.08em' }}>SALE</span>
+                          <span style={{ fontSize: 10, background: S.gold, color: '#0a0a0a', padding: '2px 6px', marginLeft: 8, letterSpacing: '0.08em' }}>SALE</span>
                         )}
                       </p>
                     </div>
