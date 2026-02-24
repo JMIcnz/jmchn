@@ -3,10 +3,21 @@
  *
  * At build time, Gatsby calls the Cloudflare Worker API to fetch all products,
  * then generates a static HTML page for each one (SEO-optimised, blazing fast).
+ *
+ * Note: this file runs in plain Node.js — do NOT import from .ts files.
+ * The fetch logic is inlined here directly.
  */
 
-const { productsApi } = require('./src/lib/api')
 const path = require('path')
+
+const API_BASE = process.env.GATSBY_API_URL || 'https://api.yourstore.com'
+
+async function fetchAllProducts() {
+  const res = await fetch(`${API_BASE}/products?limit=1000`)
+  if (!res.ok) throw new Error(`API responded with status ${res.status}`)
+  const data = await res.json()
+  return data.products || []
+}
 
 exports.createPages = async ({ actions, reporter }) => {
   const { createPage } = actions
@@ -15,8 +26,7 @@ exports.createPages = async ({ actions, reporter }) => {
 
   let allProducts = []
   try {
-    const { products } = await productsApi.list({ limit: 1000 })
-    allProducts = products
+    allProducts = await fetchAllProducts()
   } catch (err) {
     reporter.panicOnBuild('Failed to fetch products from API', err)
     return
@@ -28,7 +38,7 @@ exports.createPages = async ({ actions, reporter }) => {
     createPage({
       path: `/products/${product.slug}`,
       component: path.resolve('./src/templates/ProductPage.tsx'),
-      context: { product },    // passed as pageContext — no extra fetch at runtime
+      context: { product }, // passed as pageContext — no extra fetch at runtime
     })
   })
 
