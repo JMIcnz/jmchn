@@ -58,11 +58,11 @@ const getDb = (env: Env) => neon(env.DATABASE_URL)
 
 async function createToken(userId: string, secret: string, role = 'customer') {
   const key = new TextEncoder().encode(secret)
-  return new SignJWT({ sub: userId, role })
-    .setProtectedHeader({ alg: 'HS256' })
-    .setIssuedAt()
-    .setExpirationTime('7d')
-    .sign(key)
+
+  return new SignJWT({ sub: userId, role: user.role ?? 'customer' })
+  .setProtectedHeader({ alg: 'HS256' })
+  .setExpirationTime('7d')
+  .sign(key)
 }
 
 async function verifyToken(token: string, secret: string): Promise<string> {
