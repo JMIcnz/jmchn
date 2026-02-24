@@ -6,6 +6,7 @@ compatibility_flags = ["nodejs_compat"]
 [vars]
 ENVIRONMENT = "production"
 CORS_ORIGIN  = "https://jmshop.pages.dev"   # ← update to your Gatsby domain
+# The avove will create text variable in Cloudflare Workers Settings 
 
 # Secrets (set via: wrangler secret put SECRET_NAME)
 # DATABASE_URL          — Neon connection string (pooled)
