@@ -1,11 +1,11 @@
-name = "ecommerce-api"
+name = "bizify"
 main = "src/index.ts"
 compatibility_date = "2024-09-23"
 compatibility_flags = ["nodejs_compat"]
 
 [vars]
 ENVIRONMENT = "production"
-CORS_ORIGIN  = "https://yourstore.com"   # ← update to your Gatsby domain
+CORS_ORIGIN  = "https://jmshop.pages.dev"   # ← update to your Gatsby domain
 
 # Secrets (set via: wrangler secret put SECRET_NAME)
 # DATABASE_URL          — Neon connection string (pooled)
@@ -22,5 +22,5 @@ command = "npm run build"
 
 # Route the /webhooks path without rate limiting in production
 [[routes]]
-pattern = "api.yourstore.com/*"
-zone_name = "yourstore.com"
+pattern = "bizify.jmi.workers.dev/*"
+zone_name = "jmshop.pages.dev"
