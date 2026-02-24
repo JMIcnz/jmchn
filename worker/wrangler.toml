@@ -21,6 +21,6 @@ globs = ["**/*.ts"]
 #command = "npm run build"
 
 # Route the /webhooks path without rate limiting in production
-[[routes]]
-pattern = "bizify.jmi.workers.dev/*"
-zone_name = "jmshop.pages.dev"
+#[[routes]]
+#pattern = "bizify.jmi.workers.dev/*"
+#zone_name = "jmshop.pages.dev"
