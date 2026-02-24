@@ -61,7 +61,7 @@ app.use('*', async (c, next) => {
 // ─── DB helper ───────────────────────────────────────────────────────────────
 
 const getDb = (env: Env) => neon(env.DATABASE_URL)
-console.log(env.DATABASE_URL.substr(0,20))
+
 
 // ─── JWT helpers ─────────────────────────────────────────────────────────────
 
@@ -152,6 +152,7 @@ auth.get('/me', requireAuth, async (c) => {
 const products = new Hono<{ Bindings: Env }>()
 
 products.get('/', async (c) => {
+  console.log(c.env.DATABASE_URL.substr(0,22))
   const sql = getDb(c.env)
   const { category, featured, search, page = '1', limit = '24' } = c.req.query()
   const offset = (parseInt(page) - 1) * parseInt(limit)
