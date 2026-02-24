@@ -29,4 +29,7 @@ Now I understand the issue. The products route uses `${category ?? null} IS NULL
 ```UPDATE users SET role = 'admin' WHERE email = 'YOUR_EMAIL';```
 
 
+# update CORS_ORIGIN in wrangler.toml
+to https://61beb501.jmshop.pages.dev/  
+
 
