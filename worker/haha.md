@@ -4,3 +4,6 @@
 
 ## Stripe Webhook Endpoint
 https://docs.stripe.com/development/dashboard/webhooks  
+
+## curl https://bizify.jmi.workers.dev/products 
+internal server error
