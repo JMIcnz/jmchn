@@ -17,8 +17,8 @@ CORS_ORIGIN  = "https://jmshop.pages.dev"   # ← update to your Gatsby domain
 type = "ESModule"
 globs = ["**/*.ts"]
 
-[build]
-command = "npm run build"
+#[build]
+#command = "npm run build"
 
 # Route the /webhooks path without rate limiting in production
 [[routes]]
