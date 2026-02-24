@@ -61,6 +61,7 @@ app.use('*', async (c, next) => {
 // ─── DB helper ───────────────────────────────────────────────────────────────
 
 const getDb = (env: Env) => neon(env.DATABASE_URL)
+console.log(env.DATABASE_URL.substr(0,20))
 
 // ─── JWT helpers ─────────────────────────────────────────────────────────────
 
