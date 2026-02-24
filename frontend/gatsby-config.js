@@ -35,11 +35,11 @@ module.exports = {
     },
 
     // Environment variables available in browser as GATSBY_*
-    {
-      resolve: 'gatsby-plugin-env-variables',
-      options: {
-        allowList: ['GATSBY_API_URL', 'GATSBY_STRIPE_PUBLISHABLE_KEY'],
-      },
-    },
+    //{
+      //resolve: 'gatsby-plugin-env-variables',
+      //options: {
+      //  allowList: ['GATSBY_API_URL', 'GATSBY_STRIPE_PUBLISHABLE_KEY'],
+      //},
+    //},
   ],
 }
