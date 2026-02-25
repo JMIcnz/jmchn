@@ -6,6 +6,9 @@
  * Add-to-cart is a client-side action via CartContext.
  */
 
+/**
+ * ProductPage.tsx — Static Gatsby template with integrated cart drawer
+ */
 import React, { useState, useCallback, useEffect } from 'react'
 import { Helmet } from 'react-helmet'
 import { Link } from 'gatsby'
@@ -78,12 +81,13 @@ async function apiRemoveItem(itemId: string): Promise<CartState> {
 }
 
 // ── Cart Drawer ────────────────────────────────────────────────────────────────
-function CartDrawer({ open, onClose, cart, onUpdate, onRemove, onCheckout, checkingOut }: {
+function CartDrawer({ open, onClose, cart, onUpdate, onRemove, onCheckout, checkingOut, checkoutError }: {
   open: boolean; onClose: () => void; cart: CartState
   onUpdate: (id: string, qty: number) => void
   onRemove: (id: string) => void
   onCheckout: () => void
   checkingOut: boolean
+  checkoutError: string | null
 }) {
   const S = { bg: '#0a0a0a', surface: '#111', surface2: '#181818', border: '#222', gold: '#c8a96e', text: '#e8e4dc', muted: '#6a6560', error: '#c0392b' }
 
@@ -178,6 +182,11 @@ function CartDrawer({ open, onClose, cart, onUpdate, onRemove, onCheckout, check
               <span style={{ fontFamily: 'Georgia, serif', fontSize: 22, color: S.text }}>{fmt(cart.subtotal)}</span>
             </div>
             <p style={{ fontSize: 11, color: S.muted, marginBottom: 16 }}>Shipping & tax calculated at checkout</p>
+            {checkoutError && (
+              <div style={{ background: '#1a0808', border: '1px solid #c0392b', padding: '10px 14px', marginBottom: 12, fontSize: 12, color: '#e74c3c', lineHeight: 1.6 }}>
+                {checkoutError}
+              </div>
+            )}
             <button
               onClick={onCheckout}
               disabled={checkingOut}
@@ -208,6 +217,7 @@ export default function ProductPage({ pageContext }: { pageContext: { product: P
   const [addingToCart, setAddingToCart] = useState(false)
   const [justAdded, setJustAdded] = useState(false)
   const [checkingOut, setCheckingOut] = useState(false)
+  const [checkoutError, setCheckoutError] = useState<string | null>(null)
 
   const price = selectedVariant?.price_cents ?? product.price_cents
   const inStock = selectedVariant ? selectedVariant.stock_qty > 0 : true
@@ -247,6 +257,7 @@ export default function ProductPage({ pageContext }: { pageContext: { product: P
 
   const handleCheckout = useCallback(async () => {
     setCheckingOut(true)
+    setCheckoutError(null)
     try {
       const res = await fetch(`${API_BASE}/checkout/session`, {
         method: 'POST', headers: getHeaders(),
@@ -256,9 +267,17 @@ export default function ProductPage({ pageContext }: { pageContext: { product: P
         }),
       })
       const data = await res.json()
-      if (data.url) window.location.href = data.url
-    } catch (err) {
+      if (!res.ok) {
+        throw new Error(data.error || `Server error ${res.status}`)
+      }
+      if (data.url) {
+        window.location.href = data.url
+      } else {
+        throw new Error('Stripe did not return a checkout URL. Check STRIPE_SECRET_KEY is set in your Worker secrets.')
+      }
+    } catch (err: any) {
       console.error('Checkout failed', err)
+      setCheckoutError(err.message)
       setCheckingOut(false)
     }
   }, [])
@@ -420,6 +439,7 @@ export default function ProductPage({ pageContext }: { pageContext: { product: P
         onRemove={handleRemove}
         onCheckout={handleCheckout}
         checkingOut={checkingOut}
+        checkoutError={checkoutError}
       />
     </>
   )
