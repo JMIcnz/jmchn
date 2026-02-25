@@ -39,8 +39,19 @@ const app = new Hono<{ Bindings: Env }>()
 app.use('*', logger())
 app.use('*', secureHeaders())
 app.use('*', async (c, next) => {
+  const requestOrigin = c.req.header('Origin') || ''
+  const configuredOrigin = c.env.CORS_ORIGIN || ''
+
+  // Allow exact match, any *.pages.dev preview, localhost, and workers.dev
+  const isAllowed =
+    !requestOrigin ||
+    requestOrigin === configuredOrigin ||
+    /^https:\/\/[a-z0-9-]+\.pages\.dev$/.test(requestOrigin) ||
+    /^https?:\/\/localhost(:\d+)?$/.test(requestOrigin) ||
+    /^https:\/\/[a-z0-9-]+\.workers\.dev$/.test(requestOrigin)
+
   const corsMiddleware = cors({
-    origin: c.env.CORS_ORIGIN || '*',
+    origin: isAllowed ? (requestOrigin || '*') : configuredOrigin,
     allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowHeaders: ['Content-Type', 'Authorization', 'X-Cart-Token'],
     exposeHeaders: ['X-Cart-Token'],
@@ -58,11 +69,11 @@ const getDb = (env: Env) => neon(env.DATABASE_URL)
 
 async function createToken(userId: string, secret: string, role = 'customer') {
   const key = new TextEncoder().encode(secret)
-
-  return new SignJWT({ sub: userId, role: user.role ?? 'customer' })
-  .setProtectedHeader({ alg: 'HS256' })
-  .setExpirationTime('7d')
-  .sign(key)
+  return new SignJWT({ sub: userId, role })
+    .setProtectedHeader({ alg: 'HS256' })
+    .setIssuedAt()
+    .setExpirationTime('7d')
+    .sign(key)
 }
 
 async function verifyToken(token: string, secret: string): Promise<string> {
@@ -587,3 +598,116 @@ app.onError((err, c) => {
 })
 
 export default app
+
+
+// ─── GOOGLE OAUTH ─────────────────────────────────────────────────────────────
+// Add these env vars (wrangler secret put):
+//   GOOGLE_CLIENT_ID      — from Google Cloud Console → OAuth 2.0 Credentials
+//   GOOGLE_CLIENT_SECRET  — from Google Cloud Console → OAuth 2.0 Credentials
+//   ADMIN_EMAILS          — comma-separated list of emails allowed as admin
+//                           e.g. "you@gmail.com,colleague@gmail.com"
+//
+// In Google Cloud Console → APIs & Services → Credentials → OAuth 2.0:
+//   Authorised redirect URI: https://bizify.jmi.workers.dev/auth/google/callback
+
+type OAuthEnv = Env & {
+  GOOGLE_CLIENT_ID: string
+  GOOGLE_CLIENT_SECRET: string
+  ADMIN_EMAILS: string   // comma-separated whitelist
+}
+
+// Step 1 — redirect browser to Google consent screen
+app.get('/auth/google', (c) => {
+  const env = c.env as OAuthEnv
+  const returnTo = c.req.query('return_to') || ''
+
+  const params = new URLSearchParams({
+    client_id:     env.GOOGLE_CLIENT_ID,
+    redirect_uri:  `${new URL(c.req.url).origin}/auth/google/callback`,
+    response_type: 'code',
+    scope:         'openid email profile',
+    access_type:   'offline',
+    prompt:        'select_account',
+    state:         Buffer.from(returnTo).toString('base64'),
+  })
+
+  return c.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params}`)
+})
+
+// Step 2 — Google redirects back here with ?code=...
+app.get('/auth/google/callback', async (c) => {
+  const env = c.env as OAuthEnv
+  const { code, state, error } = c.req.query()
+
+  // Decode return_to URL (where to redirect the browser after login)
+  let returnTo = '/'
+  try { returnTo = Buffer.from(state || '', 'base64').toString('utf-8') || '/' } catch {}
+
+  const errorRedirect = (msg: string) =>
+    c.redirect(`${returnTo}${returnTo.includes('?') ? '&' : '?'}error=${encodeURIComponent(msg)}`)
+
+  if (error || !code) return errorRedirect('Google sign-in was cancelled or failed.')
+
+  try {
+    const origin = new URL(c.req.url).origin
+
+    // Exchange code for tokens
+    const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        code,
+        client_id:     env.GOOGLE_CLIENT_ID,
+        client_secret: env.GOOGLE_CLIENT_SECRET,
+        redirect_uri:  `${origin}/auth/google/callback`,
+        grant_type:    'authorization_code',
+      }),
+    })
+
+    const tokens = await tokenRes.json() as any
+    if (!tokenRes.ok || !tokens.id_token) {
+      return errorRedirect('Failed to exchange Google code for token.')
+    }
+
+    // Decode the id_token JWT (no signature verification needed — came directly from Google)
+    const [, payloadB64] = tokens.id_token.split('.')
+    const payload = JSON.parse(atob(payloadB64.replace(/-/g, '+').replace(/_/g, '/')))
+    const { email, name, picture, sub: googleId } = payload
+
+    if (!email) return errorRedirect('Google did not return an email address.')
+
+    // Check admin whitelist
+    const adminEmails = (env.ADMIN_EMAILS || '').split(',').map(e => e.trim().toLowerCase())
+    if (!adminEmails.includes(email.toLowerCase())) {
+      return errorRedirect(`${email} is not authorised as an admin. Contact your administrator.`)
+    }
+
+    const sql = getDb(c.env)
+
+    // Upsert user
+    const [user] = await sql`
+      INSERT INTO users (email, full_name, avatar_url, email_verified)
+      VALUES (${email.toLowerCase()}, ${name ?? null}, ${picture ?? null}, TRUE)
+      ON CONFLICT (email) DO UPDATE SET
+        full_name     = COALESCE(EXCLUDED.full_name, users.full_name),
+        avatar_url    = COALESCE(EXCLUDED.avatar_url, users.avatar_url),
+        email_verified = TRUE,
+        updated_at    = NOW()
+      RETURNING id, email
+    `
+
+    // Ensure role column exists and set admin
+    await sql`
+      UPDATE users SET role = 'admin' WHERE id = ${user.id}
+    `
+
+    const jwt = await createToken(user.id, env.JWT_SECRET, 'admin')
+
+    // Redirect back to admin page with token in URL — page JS picks it up and stores in localStorage
+    return c.redirect(`${returnTo}${returnTo.includes('?') ? '&' : '?'}token=${jwt}`)
+
+  } catch (err: any) {
+    console.error('Google OAuth error:', err)
+    return errorRedirect('An unexpected error occurred during sign-in.')
+  }
+})
