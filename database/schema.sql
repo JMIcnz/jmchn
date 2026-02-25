@@ -22,6 +22,11 @@ CREATE TABLE users (
   updated_at    TIMESTAMPTZ DEFAULT NOW()
 );
 
+ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'customer';
+
+
+
+
 CREATE TABLE sessions (
   id         UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -237,3 +242,5 @@ INSERT INTO products (slug, name, short_description, category_id, price_cents, c
    (SELECT id FROM categories WHERE slug='accessories'),
    6500, NULL, FALSE,
    '[{"url":"/images/matte-tote.jpg","alt":"Matte Utility Tote"}]');
+
+UPDATE users SET role = 'admin' WHERE email = 'ReplaceWithTheRealAdminEmail';
