@@ -9,7 +9,9 @@
  *   Orders    GET  /orders         GET  /orders/:id
  *   Webhooks  POST /webhooks/stripe
  */
-
+/**
+ * Cloudflare Workers + Hono — E-Commerce API
+ */
 
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
@@ -20,6 +22,7 @@ import { neon } from '@neondatabase/serverless'
 import Stripe from 'stripe'
 import { SignJWT, jwtVerify } from 'jose'
 import { hash, compare } from 'bcryptjs'
+import admin from './admin'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -573,6 +576,7 @@ app.route('/cart', cart)
 app.route('/checkout', checkout)
 app.route('/orders', orders)
 app.route('/webhooks', webhooks)
+app.route('/admin', admin)
 
 // Health check
 app.get('/health', (c) => c.json({ ok: true, env: c.env.ENVIRONMENT }))
