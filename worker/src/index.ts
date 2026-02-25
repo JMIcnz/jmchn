@@ -385,18 +385,24 @@ checkout.post('/session', optionalAuth, async (c) => {
 
   const stripe = new Stripe(c.env.STRIPE_SECRET_KEY)
 
-  const lineItems = items.map((item: any) => ({
-    price_data: {
-      currency: 'usd',
-      unit_amount: item.price_cents,
-      product_data: {
-        name: item.product_name + (item.variant_name ? ` — ${item.variant_name}` : ''),
-        images: item.image ? [item.image] : [],
-        metadata: { product_id: item.product_id, variant_id: item.variant_id ?? '' },
+  const lineItems = items.map((item: any) => {
+    const productData: any = {
+      name: item.product_name + (item.variant_name ? ` — ${item.variant_name}` : ''),
+      metadata: { product_id: item.product_id, variant_id: item.variant_id ?? '' },
+    }
+    // Only include image if it is a fully-qualified public URL (Stripe rejects relative paths)
+    if (item.image && item.image.startsWith('https://')) {
+      productData.images = [item.image]
+    }
+    return {
+      price_data: {
+        currency: 'usd',
+        unit_amount: item.price_cents,
+        product_data: productData,
       },
-    },
-    quantity: item.quantity,
-  }))
+      quantity: item.quantity,
+    }
+  })
 
   let customer: string | undefined
   const userId = c.get('userId')
@@ -405,11 +411,9 @@ checkout.post('/session', optionalAuth, async (c) => {
     if (user?.stripe_customer_id) customer = user.stripe_customer_id
   }
 
-  const session = await stripe.checkout.sessions.create({
+  const sessionParams: any = {
     mode: 'payment',
     line_items: lineItems,
-    customer,
-    customer_creation: customer ? undefined : 'always',
     payment_intent_data: {
       metadata: { cart_id: cartRow.id, user_id: userId ?? 'anonymous' },
     },
@@ -417,8 +421,18 @@ checkout.post('/session', optionalAuth, async (c) => {
     success_url: success_url + '?session_id={CHECKOUT_SESSION_ID}',
     cancel_url,
     shipping_address_collection: { allowed_countries: ['US', 'CA', 'GB', 'AU', 'NZ'] },
-    automatic_tax: { enabled: true },
-  })
+    // automatic_tax requires Stripe Tax to be configured — enable only when ready:
+    // automatic_tax: { enabled: true },
+  }
+
+  // Attach existing Stripe customer OR request customer creation — mutually exclusive
+  if (customer) {
+    sessionParams.customer = customer
+  } else {
+    sessionParams.customer_creation = 'always'
+  }
+
+  const session = await stripe.checkout.sessions.create(sessionParams)
 
   await sql`UPDATE carts SET stripe_session_id = ${session.id} WHERE id = ${cartRow.id}`
 
