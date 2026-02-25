@@ -618,21 +618,43 @@ function UsersPanel() {
 // ─── Login gate ───────────────────────────────────────────────────────────────
 
 function AdminLogin({ onLogin }: { onLogin: () => void }) {
+  const [tab, setTab] = useState<'login' | 'register'>('login')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [name, setName] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [googleLoading, setGoogleLoading] = useState(false)
 
-  const submit = async () => {
+  // Handle Google OAuth callback — token returned as ?token=... in URL
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const token = params.get('token')
+    const oauthError = params.get('error')
+    if (token) {
+      localStorage.setItem('admin_token', token)
+      // Clean URL
+      window.history.replaceState({}, '', window.location.pathname)
+      onLogin()
+    }
+    if (oauthError) setError(decodeURIComponent(oauthError))
+  }, [onLogin])
+
+  const submitEmailAuth = async () => {
     setLoading(true); setError('')
     try {
-      const res = await fetch(`${API_BASE}/auth/login`, {
+      const endpoint = tab === 'login' ? '/auth/login' : '/auth/register'
+      const body = tab === 'login'
+        ? { email, password }
+        : { email, password, full_name: name }
+
+      const res = await fetch(`${API_BASE}${endpoint}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify(body),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error)
-      if (data.user?.role !== 'admin') throw new Error('Not an admin account')
+      if (data.user?.role !== 'admin') throw new Error('This account does not have admin access. Ask your administrator to grant access.')
       localStorage.setItem('admin_token', data.token)
       onLogin()
     } catch (err: any) {
@@ -640,15 +662,95 @@ function AdminLogin({ onLogin }: { onLogin: () => void }) {
     } finally { setLoading(false) }
   }
 
+  const loginWithGoogle = () => {
+    setGoogleLoading(true)
+    // Redirect to Worker OAuth initiation endpoint
+    const returnTo = encodeURIComponent(window.location.href)
+    window.location.href = `${API_BASE}/auth/google?return_to=${returnTo}`
+  }
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') submitEmailAuth()
+  }
+
   return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', background: S.bg }}>
-      <div style={{ width: 360, background: S.surface, border: `1px solid ${S.border}`, padding: '48px 40px' }}>
-        <h1 style={{ fontFamily: S.font, fontStyle: 'italic', fontSize: 32, color: S.gold, marginBottom: 8 }}>STRATUM</h1>
-        <p style={{ fontSize: 11, letterSpacing: '0.1em', textTransform: 'uppercase', color: S.muted, marginBottom: 32 }}>Admin Panel</p>
-        <Input label="Email" value={email} onChange={setEmail} type="email" />
-        <Input label="Password" value={password} onChange={setPassword} type="password" />
-        {error && <p style={{ color: S.error, fontSize: 12, marginBottom: 12 }}>{error}</p>}
-        <Btn onClick={submit} disabled={loading}>{loading ? 'Signing in…' : 'Sign In'}</Btn>
+      <div style={{ width: 400, background: S.surface, border: `1px solid ${S.border}`, padding: '48px 44px' }}>
+
+        {/* Logo */}
+        <h1 style={{ fontFamily: S.font, fontStyle: 'italic', fontSize: 32, color: S.gold, marginBottom: 4 }}>STRATUM</h1>
+        <p style={{ fontSize: 10, letterSpacing: '0.12em', textTransform: 'uppercase', color: S.muted, marginBottom: 36 }}>Admin Panel</p>
+
+        {/* Google OAuth button */}
+        <button
+          onClick={loginWithGoogle}
+          disabled={googleLoading}
+          style={{
+            width: '100%', padding: '11px 0', marginBottom: 20,
+            background: '#fff', color: '#3c4043', border: '1px solid #dadce0',
+            fontSize: 13, fontFamily: S.mono, cursor: googleLoading ? 'not-allowed' : 'pointer',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
+            opacity: googleLoading ? 0.7 : 1, transition: 'box-shadow .2s',
+          }}
+          onMouseEnter={e => !googleLoading && ((e.currentTarget as HTMLButtonElement).style.boxShadow = '0 1px 6px rgba(0,0,0,.3)')}
+          onMouseLeave={e => ((e.currentTarget as HTMLButtonElement).style.boxShadow = 'none')}
+        >
+          {/* Google G logo */}
+          <svg width="18" height="18" viewBox="0 0 48 48">
+            <path fill="#4285F4" d="M44.5 20H24v8.5h11.8C34.7 33.9 30.1 37 24 37c-7.2 0-13-5.8-13-13s5.8-13 13-13c3.1 0 5.9 1.1 8.1 2.9l6.4-6.4C34.6 4.1 29.6 2 24 2 11.8 2 2 11.8 2 24s9.8 22 22 22c11 0 21-8 21-22 0-1.3-.2-2.7-.5-4z"/>
+            <path fill="#34A853" d="M6.3 14.7l7 5.1C15 16.1 19.1 13 24 13c3.1 0 5.9 1.1 8.1 2.9l6.4-6.4C34.6 4.1 29.6 2 24 2 16.3 2 9.7 7.4 6.3 14.7z"/>
+            <path fill="#FBBC05" d="M24 46c5.5 0 10.5-1.9 14.3-5.1l-6.6-5.4C29.6 37 26.9 38 24 38c-6 0-10.6-3.1-11.7-8.5l-7 5.4C8.4 42.1 15.6 46 24 46z"/>
+            <path fill="#EA4335" d="M44.5 20H24v8.5h11.8c-.9 2.8-2.8 5-5.3 6.5l6.6 5.4C41.1 37.3 45 31.3 45 24c0-1.3-.2-2.7-.5-4z"/>
+          </svg>
+          {googleLoading ? 'Redirecting…' : 'Continue with Google'}
+        </button>
+
+        {/* Divider */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
+          <div style={{ flex: 1, height: 1, background: S.border }} />
+          <span style={{ fontSize: 11, color: S.dim, letterSpacing: '0.06em' }}>OR</span>
+          <div style={{ flex: 1, height: 1, background: S.border }} />
+        </div>
+
+        {/* Tab switcher */}
+        <div style={{ display: 'flex', marginBottom: 24, border: `1px solid ${S.border}` }}>
+          {(['login', 'register'] as const).map(t => (
+            <button key={t} onClick={() => { setTab(t); setError('') }} style={{
+              flex: 1, padding: '9px 0', fontSize: 11, letterSpacing: '0.1em',
+              textTransform: 'uppercase', background: tab === t ? S.surface2 : 'none',
+              color: tab === t ? S.gold : S.muted, border: 'none', cursor: 'pointer',
+              fontFamily: S.mono, borderBottom: `2px solid ${tab === t ? S.gold : 'transparent'}`,
+              transition: 'all .2s',
+            }}>
+              {t === 'login' ? 'Sign In' : 'Register'}
+            </button>
+          ))}
+        </div>
+
+        {/* Form */}
+        {tab === 'register' && (
+          <Input label="Full Name" value={name} onChange={setName} placeholder="Your name" />
+        )}
+        <Input label="Email" value={email} onChange={setEmail} type="email" placeholder="admin@yourstore.com" />
+        <div onKeyDown={handleKeyDown}>
+          <Input label="Password" value={password} onChange={setPassword} type="password" placeholder="••••••••" />
+        </div>
+
+        {error && (
+          <div style={{ background: '#1a0808', border: `1px solid ${S.error}`, padding: '10px 14px', marginBottom: 14, fontSize: 12, color: '#e74c3c', lineHeight: 1.5 }}>
+            {error}
+          </div>
+        )}
+
+        <Btn onClick={submitEmailAuth} disabled={loading}>
+          {loading ? 'Please wait…' : tab === 'login' ? 'Sign In' : 'Create Account'}
+        </Btn>
+
+        <p style={{ fontSize: 11, color: S.dim, marginTop: 20, lineHeight: 1.6, textAlign: 'center' }}>
+          {tab === 'register'
+            ? 'New accounts require admin role to be granted by an existing admin.'
+            : 'Only accounts with admin role can access this panel.'}
+        </p>
       </div>
     </div>
   )
